@@ -1,0 +1,25 @@
+{
+  "name": "wombat",
+  "version": "1.0.0",
+  "description": "compression system using sweep mechanisms",
+  "keywords": [
+    "wombat",
+    "compress"
+  ],
+  "homepage": "https://github.com/taypme/wombat#readme",
+  "bugs": {
+    "url": "https://github.com/taypme/wombat/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taypme/wombat.git"
+  },
+  "license": "ISC",
+  "author": "taypme",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {}
+}
