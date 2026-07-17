@@ -1,0 +1,6 @@
+- Everything should act on the `index.js` file and the `lib/*.js` directory for includes.
+- npm modules may be installed at-will if needed.
+- Abstracting code into `lib/*.js` is encouraged.
+- The `methods/` folder is for compression methods, with one file for each method.
+- This project is a compression algorithm; all efforts should support that purpose.
+- Do not use `;` characters when possible.
