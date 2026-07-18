@@ -1,164 +1,210 @@
 # Wombat
 
-Wombat is an experimental compression algorithm using sweep-based methods. The current implementation converts input text into a binary string, runs one or more compression methods against that string, chooses the best attempt from each method's configured argument values, and emits a compact JSON description that can be paired with the mutated string for later decoding.
+Wombat is an experimental compression algorithm using sweep-based methods. It converts input text into UTF-8 bytes represented as binary, then repeatedly runs compression methods against the current string and keeps whichever attempt produces the smallest total payload.
 
-The project is still a work in progress. The current code is primarily a prototype for exploring how repeated sections can be removed from a string and represented as smaller metadata.
+The project is a prototype. The current goal is to test which repeated sections can be represented with less data than the original string.
+
+## Usage
+
+Run one compression pass:
+
+```sh
+node index.js 1 taytay
+```
+
+Run three compression passes:
+
+```sh
+node index.js 3 taytay
+```
+
+Pipe input through stdin:
+
+```sh
+printf 'taytay' | node index.js 3
+```
+
+The first argument is the number of compression attempts, or passes. Text after that argument is the input. If no text argument is provided, `index.js` reads from stdin.
 
 ## Current Flow
 
-Run the program with text after `node index.js`:
+`index.js` coordinates the compression process:
 
-```sh
-node index.js tay
+1. Reads the pass count from `process.argv[2]`.
+2. Reads input from remaining CLI args or from stdin.
+3. Converts the input to binary with `utf8ToBinary()`.
+4. Loads every method from `./methods`.
+5. Runs every method with every value from that method's `arguments()` export.
+6. Scores each attempt by total payload size.
+7. Chooses the smallest attempt for the current pass.
+8. Stores the cleaned candidate metadata when the pass actually compresses.
+9. Loops until the requested number of passes has run.
+10. Prints per-iteration compression and total compression after every pass.
+
+The script no longer appends demo text to `str`. It compresses the actual input only.
+
+## Why Input Is Binary
+
+Input text is interpreted as UTF-8, then converted into a binary string.
+
+For example:
+
+```txt
+tay
 ```
 
-The entrypoint in `index.js` does the following:
-
-1. Reads the command line input.
-2. Converts the input into UTF-8 bytes represented as binary.
-3. Adds a demo suffix to `str` so the compressor has repeated data to find.
-4. Loads all method files from `./methods`.
-5. Runs each method with each value from that method's `arguments()` export.
-6. Keeps the best attempt for each method.
-7. Builds a candidate array for each method.
-8. Selects one final candidate.
-9. Removes values from the candidate that will be transmitted separately or are only needed during comparison.
-10. Compares the final mutated string length plus JSON metadata length against the original demo string length.
-
-## Why Input Is Interpreted As Binary
-
-The input is interpreted as UTF-8 and then converted to binary with `utf8ToBinary()` from `lib/utf8.js`.
-
-This gives the compression methods a uniform alphabet of `0` and `1` characters regardless of the original input text. That makes the sweeps easier to reason about because every input becomes one continuous binary string. For example, `tay` becomes:
+becomes:
 
 ```txt
 011101000110000101111001
 ```
 
-Binary also makes repeated low-level patterns visible. The current demo appends extra repeated binary-like sections to prove the compression method can find and remove repeated runs.
+This gives compression methods a consistent input alphabet of `0` and `1`, no matter what text was entered. That makes repeated low-level byte patterns easier to compare.
 
-## The Demo `str` Suffix
+## Project Layout
 
-`index.js` creates `str` from user input:
-
-```js
-let str = utf8ToBinary(input)
-```
-
-It then appends this demo content:
-
-```txt
-++00000111111111111111111111111111_01010101_00000111111111111111111111111111
-```
-
-The purpose of adding onto `str` is demonstration. Short inputs such as `tay` do not naturally contain enough repetition to show compression behavior clearly. The appended data includes repeated sections so `methods/occurence.js` has something useful to discover.
-
-In a real compression path, this artificial suffix would be removed. The method would operate only on the actual encoded input or on a real input stream that naturally contains repeated patterns.
-
-## Modular Structure
-
-The project is intentionally split into a small entrypoint, shared helpers, and compression methods.
-
-`index.js` is the coordinator. It reads input, prepares the binary string, loads compression methods, runs attempts, selects a candidate, and prints the result.
+`index.js` is the CLI entrypoint and compression coordinator.
 
 `lib/` contains shared helpers:
 
-- `lib/require-directory.js` loads every `.js` file from a directory and returns an object keyed by filename.
-- `lib/utf8.js` contains UTF-8 and binary helpers.
+- `lib/require-directory.js` loads every `.js` file in a directory.
+- `lib/utf8.js` contains UTF-8 helpers, binary conversion, and random marker selection.
 
-`methods/` contains compression methods. Each method gets one file. There is currently one method:
+`methods/` contains compression methods, one file per method:
 
 - `methods/occurence.js`
+- `methods/utf8.js`
 
-Even though there is only one method today, `index.js` already treats methods as a collection:
+Methods are loaded dynamically:
 
 ```js
 const methods = requireDirectory('./methods')
 ```
 
-It then loops through every loaded method. This lets future compression strategies be added by creating new files in `methods/` without rewriting the entrypoint.
-
-## Shared UTF-8 Helpers
-
-`lib/utf8.js` currently exports:
-
-- `utf8()`: builds an object where each valid UTF-8 character key is set to `false`.
-- `char(characters)`: chooses a random character from that object whose value is `false`, marks it as `true`, and returns `{ utf8, c }`.
-- `utf8ToBinary(text)`: converts UTF-8 text into a binary string.
-- `defaultBlacklist`: excludes escape-sensitive characters such as backslash, quotes, newlines, tabs, and the null byte from the generated UTF-8 object.
-
-The `utf8()` and `char()` helpers are not yet wired into the main compression flow, but they are useful for future encoding work where the algorithm may need unused marker characters.
+That means a new compression method can be added by creating a new file in `methods/` with the expected exports.
 
 ## Method Contract
 
-Each compression method is expected to export at least:
+Each method should export:
 
 ```js
 module.exports.arguments = () => {
-  return [7, 32]
+  return [10, 11, 12]
 }
 
-module.exports.encode = (str, a) => {
+module.exports.compress = (str, a) => {
   return { a_, s, n, v }
 }
+
+module.exports.decompress = (str, n, v) => {
+  return str
+}
 ```
 
-The current `decode` export exists in `methods/occurence.js`, but it has not been implemented yet.
+The fields returned by `compress()` are:
 
-`arguments()` returns the argument values that should be tried for that method. For `occurence.js`, those values are currently `7` and `32`. In this method, the argument controls the sweep width.
+- `a_`: the argument used for that attempt
+- `s`: the mutated string
+- `n`: method-specific metadata
+- `v`: method-specific value metadata
 
-`encode(str, a)` runs the method against `str` using the argument `a`.
+The shape of `n` is intentionally method-specific. `index.js` treats it as opaque data and includes it in the candidate JSON. Each method's `decompress()` function is responsible for understanding its own `n` shape.
 
-## Attempt System
+## Attempts And Passes
 
-For each method, `index.js` tries every value returned by `method.arguments()`.
+One pass tries every method and every argument for that method.
 
-For each argument, it calls:
+For each method argument, `index.js` calls:
 
 ```js
-const { a_, s, n, v } = encode(str, a)
+const { a_, s, n, v } = methodCompress(str, a)
 ```
 
-The result fields currently mean:
-
-- `a_`: the argument used for the attempt
-- `s`: the mutated string after removing selected repeated sections
-- `n`: the indexes where removed sections were found
-- `v`: the repeated section value, also called the needle
-
-`index.js` also computes:
+Then it scores the attempt with:
 
 ```js
-const l = s.length
+s.length + JSON.stringify([map[m], n, v]).length
 ```
 
-The attempt with the smallest mutated string length is kept for that method. This is the best attempt for that method because a smaller `s` means more source characters were removed.
+This matters because compression is not just about making `s` shorter. The restore metadata also costs characters. A short string with a huge index list may be worse than the original.
 
-This lets one method test multiple sweep sizes and keep whichever size compresses best for the current input.
+After the best candidate is selected, the pass is rejected if it is not smaller than the input for that pass. Rejected passes keep the string unchanged and store no candidate metadata.
 
-## Candidate System
+## Total Compression
 
-After the best attempt is chosen for a method, `index.js` turns it into a candidate array:
+The script reports two compression measurements.
+
+Iteration compression compares only the current pass input against the current pass output:
+
+```txt
+iteration length: 48 to 37
+iteration compressed: 22.92%
+```
+
+Total compression compares the original binary length against the current string plus all accepted candidate metadata:
+
+```txt
+total length: 48 to 39
+total compressed: 18.75%
+```
+
+Percentages are rounded to two decimal places.
+
+## Candidate Arrays
+
+Candidates are arrays to reduce JSON size:
 
 ```js
-const result = [
+[
   map[m],
   attempt.n,
   attempt.v,
   attempt.l,
   attempt.s,
+  attempt.t,
 ]
 ```
 
-That candidate is stored in `cans` under the method name.
+The key constants in `index.js` define those positions:
 
-The final candidate is selected from `cans`. With only one method, this always selects `occurence`. When multiple methods exist, this system is intended to compare method outputs and keep the best compression result.
+```js
+const key_m = 0
+const key_n = 1
+const key_v = 2
+const key_l = 3
+const key_s = 4
+const key_t = 5
+```
 
-Current note: the final candidate reducer currently compares candidate lengths with a greater-than check. Since smaller final length is better for compression, this should be reviewed when multiple methods are added.
+The meanings are:
 
-## The `map` Variable
+- `key_m`: numeric method id
+- `key_n`: method-specific restore metadata
+- `key_v`: method-specific value metadata
+- `key_l`: mutated string length
+- `key_s`: mutated string
+- `key_t`: total payload size for scoring
 
-`map` is used to replace method names with small numeric ids:
+Before metadata is saved, `cleanCandidate()` removes `s` and `l`:
+
+```js
+function cleanCandidate (candidate) {
+  candidate.splice(key_s, key_s)
+  candidate.splice(key_l, key_l)
+}
+```
+
+The cleaned candidate keeps only:
+
+```js
+[methodId, n, v]
+```
+
+This keeps the final JSON smaller because `s` is stored separately as the current mutated string, and `l` can be recomputed.
+
+## Method Map
+
+`map` converts method names into short numeric ids:
 
 ```js
 let map = {}
@@ -169,218 +215,206 @@ for (let m in methods) {
 }
 ```
 
-Instead of storing a method name such as `"occurence"` in the final JSON, the candidate stores `0`.
+Instead of storing `"occurence"` or `"utf8"` in every candidate, the compressed metadata stores a number. This reduces JSON size.
 
-This is meant to decrease the character count in the final JSON. Smaller metadata matters because the compressed payload is measured as:
+Because methods are loaded from the filesystem, ids depend on the sorted method filenames returned by `requireDirectory()`. A stable decompression format will need to preserve or define this method id mapping.
 
-```txt
-mutated string length + JSON metadata length
-```
+## `methods/occurence.js`
 
-If the metadata grows too large, it can cancel out the savings from removing repeated sections.
+`occurence.js` removes repeated sections and stores their original indexes.
 
-## The `key_*` Constants
-
-The candidate is stored as an array instead of an object to reduce JSON size.
-
-The `key_*` constants document the positions in that array:
+Its arguments currently cover section lengths from `10` through `42`:
 
 ```js
-const key_m = 0
-const key_n = 1
-const key_v = 2
-const key_l = 3
-const key_s = 4
-```
+let i = 10
 
-Those keys mean:
-
-- `key_m`: method id from `map`
-- `key_n`: occurrence indexes
-- `key_v`: removed value, or needle
-- `key_l`: mutated string length
-- `key_s`: mutated string
-
-The array form is shorter than an object with named fields. For example, `[0,[26,68],"needle"]` is shorter than `{"method":0,"indexes":[26,68],"value":"needle"}`.
-
-## The `cleanCandidate` Function
-
-`cleanCandidate()` removes values from the candidate before JSON encoding:
-
-```js
-function cleanCandidate () {
-  candidate.splice(key_s, key_s)
-  candidate.splice(key_l, key_l)
+while (i <= 42) {
+  range.push(i)
+  i++
 }
 ```
 
-The candidate initially includes both `l` and `s` so the program can compare candidate quality and keep the mutated string. After a final candidate is selected:
+For each section length, `compress(str, a)`:
 
-- `s` is assigned back to `str`
-- `l` can be recomputed from `str.length`
-- neither value needs to be stored inside the final JSON metadata
+1. Splits the string into characters.
+2. Walks through every possible section of length `a`.
+3. Counts how many non-overlapping times that section can be used.
+4. Chooses the section with the highest usable count.
+5. Sweeps the string again.
+6. Removes each non-overlapping match.
+7. Stores each removed index in `n`.
+8. Stores the removed string in `v`.
 
-Removing them decreases the final JSON character count.
+The key fix in this method is that it counts non-overlapping occurrences. For a string like:
 
-After cleaning, the candidate keeps only:
+```txt
+aaaaa
+```
+
+and a section length of `3`, `aaa` appears in three sliding windows, but only one copy can be removed without overlapping characters. The method now counts the usable removals, not every overlapping window.
+
+If called directly with a section length of `3`, the compressed result can look like:
 
 ```js
-[methodId, indexes, value]
+{
+  a_: 3,
+  s: 'X',
+  n: [0, 4],
+  v: 'abc'
+}
 ```
 
-For the current `occurence` method, that is enough metadata to describe what was removed from the mutated string.
+for a source like:
 
-## The `occurence.js` Encode Method
+```txt
+abcXabc
+```
 
-`methods/occurence.js` is a compression method that searches for repeated sections of a fixed length.
-
-Its arguments are:
+`decompress(str, n, v)` reinserts `v` at each index in `n`:
 
 ```js
-return [7, 32]
+s = s.slice(0, i) + v + s.slice(i)
 ```
 
-That means the method tries two sweep widths:
+The indexes are stored in original-string coordinates. Because reinserting from left to right grows the string, later indexes line back up as previous removals are restored.
 
-- `7`
-- `32`
+## `methods/utf8.js`
 
-For each width, `encode(str, a)` sweeps through the string and slices out sections of length `a`:
+`utf8.js` replaces repeated sections with marker characters that do not already exist in the string.
+
+Its arguments currently cover section lengths from `10` through `32`.
+
+The method uses:
 
 ```js
-let o = full.slice(i, i + a).join('')
+const { char, utf8 } = require('../lib/utf8')
 ```
 
-It counts how often each section appears in `c`.
-
-After counting, it chooses the section with the highest count:
+At module load, it builds a UTF-8 character map:
 
 ```js
-const needle = Object.keys(c).reduce((best, current) =>
-  c[current] > c[best] ? current : best
-)
+const characters = utf8()
 ```
 
-Then it sweeps again. When it sees the selected `needle`, it:
-
-1. Pushes the index into `n`.
-2. Skips ahead by the needle length.
-3. Does not copy that section into `s`.
-
-When the current section is not the needle, it copies the current character into `s`.
-
-The result is:
+On each compression attempt, it creates a fresh object that inherits from that base map:
 
 ```js
-return { a_: a, s, n, v: needle }
+let chars = Object.create(characters)
 ```
 
-### Counting Note
+Then it marks every character already present in the string as unavailable:
 
-The counting system still needs work.
-
-Right now, the first pass counts every matching section seen at every index. That means overlapping windows can inflate the count. For compression, the method should count unique usable occurrences that do not include or overlap other selected occurrences. It should count the occurrences that can actually be removed together, not just every raw appearance of a section.
-
-The second pass already skips ahead after finding a needle, which avoids removing overlapping copies. The counting pass should eventually use the same kind of non-overlapping logic so the selected needle reflects real compression potential.
-
-## Decode Plan
-
-The `decode` function is not implemented yet, but the current metadata is enough to describe how it should work for `occurence`.
-
-The compressed output has two parts:
-
-1. The mutated string, which is `str` after repeated sections have been removed.
-2. The cleaned candidate JSON, which contains `[methodId, indexes, value]`.
-
-For the current example, the cleaned candidate looks like:
-
-```json
-[0,[26,68],"00000111111111111111111111111111"]
+```js
+markString(chars, s)
 ```
 
-To decode:
+This prevents the method from choosing a marker that already exists in the current string.
 
-1. Read the method id from the candidate.
-2. Use the method id to find the matching method name from the method map.
-3. Call that method's `decode`.
-4. Reinsert `value` into the mutated string at each stored index.
-5. Return the rebuilt binary string.
-6. Convert the binary string back into UTF-8 bytes and then text if the original text is needed.
+For each section length, `compress(str, a)`:
 
-The decode process must be careful with indexes. Since insertions change the string length, it should either process indexes from lowest to highest while accounting for offset growth, or process from highest to lowest so earlier indexes remain stable.
+1. Finds the best repeated section of length `a`.
+2. Requires at least two usable occurrences.
+3. Pulls a random unused UTF-8 marker with `char(chars)`.
+4. Replaces each non-overlapping occurrence of the repeated section with that marker.
+5. Stores `[marker, needle]` in `n`.
+6. Repeats until no useful repeated section remains for that length.
 
-## Using The Output With The Mutated String
+The output shape is different from `occurence.js`:
 
-The theoretical compressed payload is the mutated string plus the cleaned JSON candidate.
+```js
+{
+  a_: 3,
+  s: '<marker>X<marker>Y<marker>',
+  n: [
+    ['<marker>', 'abc']
+  ],
+  v: ''
+}
+```
 
-The mutated string contains the source data after selected repeated sections have been removed. The JSON candidate contains the instructions required to reconstruct the removed data.
+`n` is a list of marker replacement pairs. `v` is unused and returned as an empty string.
 
-For storage or transmission, a caller would need to keep both:
+`decompress(str, n, v)` expands replacements in reverse order:
+
+```js
+s = s.split(marker).join(needle)
+```
+
+Reverse order matters because later marker replacements may contain strings that were created after earlier replacements.
+
+The method also prints progress while it runs:
+
+```txt
+utf8 length:  10 start:  128
+utf8 length:  10 count:  2 marker:  X needle:  0111010001
+utf8 length:  10 done:  1
+```
+
+This is useful because this method can be slow when many section lengths are tested.
+
+## `lib/utf8.js`
+
+`utf8()` returns an object where each valid UTF-8 character is a key set to `false`.
+
+The default blacklist excludes characters that would be awkward or unsafe in output:
+
+- backslash
+- double quote
+- single quote
+- backtick
+- newline
+- carriage return
+- tab
+- null byte
+
+`char(characters)` chooses a random key whose value is `false`, marks it as `true`, and returns:
+
+```js
+{
+  utf8: characters,
+  c: picked,
+}
+```
+
+It now uses a one-pass random selection approach, so it does not build a huge temporary array of every available character.
+
+`utf8ToBinary(text)` converts input text into a binary string by reading UTF-8 bytes and rendering each byte as eight bits.
+
+## Decompression Model
+
+A compressed state needs two things:
 
 ```txt
 mutated string
-candidate JSON
+candidate metadata
 ```
 
-On decode, the candidate JSON identifies the method and the removed repeated section. The mutated string provides the remaining data. Together, they should reconstruct the original binary string.
+Each candidate begins with a method id. The decompressor would use that id to select the right method, then pass that method the current string plus the candidate's `n` and `v`.
 
-The current CLI does not yet emit a formal payload format. It logs both the mutated string and the cleaned candidate while measuring their combined length.
+For `occurence`, `n` is an array of indexes and `v` is the removed repeated string.
 
-## Demo: `node index.js tay`
+For `utf8`, `n` is an array of `[marker, needle]` pairs and `v` is empty.
 
-Current output:
+Because the meaning of `n` changes by method, shared decompression should not try to inspect or normalize `n`. It should route the data to the method that produced it.
 
-```txt
-011101000110000101111001++00000111111111111111111111111111_01010101_00000111111111111111111111111111
-
--------------------
-arg:  7
-len:  100
-needle:  1111111
--------------------
-arg:  32
-len:  100
-needle:  00000111111111111111111111111111
--------------------
-
-candidate:  [
-  0,
-  [ 26, 68 ],
-  '00000111111111111111111111111111',
-  36,
-  '011101000110000101111001++_01010101_'
-]
-
-str:  011101000110000101111001++_01010101_
-cleaned:  [ 0, [ 26, 68 ], '00000111111111111111111111111111' ]
-
-string length from 100 to 82
-18% compressed
-```
-
-The original demo string length is `100`. The final measured size is `82`, which is:
-
-```txt
-mutated string length + cleaned candidate JSON length
-```
-
-That gives the current demo an `18%` compression result.
+For multi-pass compression, decompression should run the accepted candidates in reverse order, because the last compression pass must be undone first.
 
 ## Current Files
 
-- `index.js`: CLI entrypoint and compression coordinator.
-- `lib/require-directory.js`: loads method modules from a directory.
-- `lib/utf8.js`: UTF-8 map helper, random character selection helper, and UTF-8-to-binary conversion.
-- `methods/occurence.js`: current sweep-based occurrence compression method.
+- `index.js`: CLI entrypoint, pass loop, candidate scoring, and reporting.
+- `lib/require-directory.js`: directory module loader.
+- `lib/utf8.js`: UTF-8 map, random marker picker, and binary conversion helper.
+- `methods/occurence.js`: repeated-section removal using index metadata.
+- `methods/utf8.js`: repeated-section replacement using unused UTF-8 marker characters.
 - `AGENTS.md`: project instructions for coding agents.
 - `.gitignore`: ignores `node_modules`.
 - `package.json`: package metadata.
 
 ## Known Work Remaining
 
-- Implement `decode` in `methods/occurence.js`.
-- Decide on a formal payload format for storing or transmitting the mutated string plus candidate JSON.
-- Fix occurrence counting so it counts unique non-overlapping occurrences that can actually be removed.
-- Review final candidate selection before adding multiple methods.
-- Remove the demo suffix when moving from prototype behavior to real compression input.
-- Add tests for encode, decode, candidate cleaning, and binary conversion.
+- Create a formal compressed payload format.
+- Add shared decompression orchestration in `index.js` or `lib/`.
+- Store or define a stable method id map for decompression.
+- Add tests for `compress`, `decompress`, scoring, multi-pass behavior, stdin input, and binary conversion.
+- Review whether random UTF-8 marker selection should become deterministic.
+- Optimize method sweeps for larger inputs.

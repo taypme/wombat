@@ -1,40 +1,81 @@
 module.exports.arguments = () => {
 
-	return [7, 32]
+	let range = []
+
+	let i = 10
+
+	while (i <= 42) {
+		range.push(i)
+		i++
+	}
+
+	return range
 }
 
-module.exports.encode = (str, a) => {
+module.exports.compress = (str, a) => {
 
 	let full = str.split('')
 	let len = full.length
 
-	console.log('len: ', len)
-
 	let c = {}
 	let s = ''
 	let n = []
+	let needle
+	let count = 0
 
-	for (let i = 0; i < len; i++) {
+	let i = 0
+
+	while (i < len) {
 
 		if (i + a > len) {
+			i++
 			continue
 		}		
 
 		let o = full.slice(i, i + a).join('')
 
-		if (c[o] === undefined) {
-			c[o] = 0
+		if (c[o] !== undefined) {
+			i++
+			continue
 		}
 
-		c[o]++
+		c[o] = 0
+
+		let j = 0
+
+		while (j < len) {
+
+			if (j + a > len) {
+				j++
+				continue
+			}
+
+			let x = full.slice(j, j + a).join('')
+
+			if (x === o) {
+				c[o]++
+				j += a
+				continue
+			}
+
+			j++
+		}
+
+		if (c[o] > count) {
+			needle = o
+			count = c[o]
+		}
+
+		i++
 	}
 
-	const needle = Object.keys(c).reduce((best, current) => c[current] > c[best] ? current : best)
-	console.log('needle: ', needle)
+	i = 0
 
-	for (let i = 0; i < len; i++) {
+	while (i < len) {
 
 		if (i + a > len) {
+			s += full[i]
+			i++
 			continue
 		}
 
@@ -42,19 +83,26 @@ module.exports.encode = (str, a) => {
 
 		if (o === needle) {
 			n.push(i)
-			i += a - 1
+			i += a
+			continue
 		}
 
 		else {
 			s += full[i]
 		}
 
+		i++
 	}
 
-	console.log("-------------------")
 	return { a_: a, s, n, v: needle }
 }
 
-module.exports.decode = (str, a) => {
+module.exports.decompress = (str, n, v) => {
+	let s = str
 
+	for (let i of n) {
+		s = s.slice(0, i) + v + s.slice(i)
+	}
+
+	return s
 }
